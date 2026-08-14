@@ -13,6 +13,7 @@
     "test:e2e": "tsx scripts/e2e-wechat.test.ts"
   },
   "dependencies": {
+    "@vercel/functions": "^3.9.3",
     "next": "^15.5.23",
     "openai": "^7.4.0",
     "react": "^19.2.8",

@@ -6,12 +6,14 @@
  * 时序约束：企微要求回调在 5 秒内返回，否则重试。AI 分析 30-60s，
  * 故必须「秒回 success + 后台 after() 处理 + 应用消息推送结果」。
  */
+import { waitUntil } from '@vercel/functions';
 import { after } from "next/server";
 import { env } from "../../../lib/env";
 import { verifySignature, decrypt } from "../../../lib/wechat-crypto";
 import { parseCallbackBody, normalizePlaintext } from "../../../lib/wechat-xml";
 import { runPipeline } from "../../../lib/pipeline";
 import { parseFigmaUrl } from "../../../lib/figma";
+
 
 // after() 仅支持 Node runtime；maxDuration 为后台任务提供预算（Vercel Fluid: Hobby 300s / Pro 800s）
 export const runtime = "nodejs";
@@ -109,9 +111,10 @@ export async function POST(req: Request): Promise<Response> {
     console.info(
       `[wechat] 收到消息 user=${msg.fromUserName} hasFigma=${hasFigma} len=${msg.content.length}`
     );
-    after(() => {
-      runPipeline(msg).catch((e) => console.error("[wechat] pipeline 异常:", e));
-    });
+    // ✅ 替换为 Vercel 专用的 waitUntil
+    waitUntil(
+      runPipeline(msg).catch((e) => console.error("[wechat] pipeline 异常:", e))
+    );
   }
 
   // 立即回包 success，满足企微 5 秒约束
