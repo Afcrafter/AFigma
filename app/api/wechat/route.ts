@@ -1,21 +1,19 @@
 /**
  * 企业微信消息网关入口。
  *  - GET：URL 验证握手（验签 + 解密 echostr，返回明文）
- *  - POST：接收消息（验签 + 解密 → 归一化），立即返回 success，用 after() 异步跑分析流水线
+ *  - POST：接收消息（验签 + 解密 → 归一化），立即返回 success，用 waitUntil() 后台跑分析流水线
  *
  * 时序约束：企微要求回调在 5 秒内返回，否则重试。AI 分析 30-60s，
- * 故必须「秒回 success + 后台 after() 处理 + 应用消息推送结果」。
+ * 故必须「秒回 success + 后台 waitUntil() 处理 + 应用消息推送结果」。
  */
-import { waitUntil } from '@vercel/functions';
-import { after } from "next/server";
+import { waitUntil } from "@vercel/functions";
 import { env } from "../../../lib/env";
 import { verifySignature, decrypt } from "../../../lib/wechat-crypto";
 import { parseCallbackBody, normalizePlaintext } from "../../../lib/wechat-xml";
 import { runPipeline } from "../../../lib/pipeline";
 import { parseFigmaUrl } from "../../../lib/figma";
 
-
-// after() 仅支持 Node runtime；maxDuration 为后台任务提供预算（Vercel Fluid: Hobby 300s / Pro 800s）
+// 后台任务在 Node runtime 运行；maxDuration 为后台任务提供预算（Vercel Fluid: Hobby 300s / Pro 800s）
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
@@ -111,9 +109,11 @@ export async function POST(req: Request): Promise<Response> {
     console.info(
       `[wechat] 收到消息 user=${msg.fromUserName} hasFigma=${hasFigma} len=${msg.content.length}`
     );
-    // ✅ 替换为 Vercel 专用的 waitUntil
+    // Vercel 专用后台任务：记录 pipeline 成功/失败状态
     waitUntil(
-      runPipeline(msg).catch((e) => console.error("[wechat] pipeline 异常:", e))
+      runPipeline(msg)
+        .then((ok) => console.info(`[wechat] pipeline 完成 ok=${ok}`))
+        .catch((e) => console.error("[wechat] pipeline 异常:", e))
     );
   }
 
