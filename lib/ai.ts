@@ -17,21 +17,38 @@ const SYSTEM_PROMPT = `你是一位资深 UI 设计师与前端工程师。请�
 }
 注意：usabilityScore 是 0-10 的整数；suggestions 至少 2 条、最多 4 条；代码片段保持简洁可读。`;
 
-const TIMEOUT_MS = 45_000;
+/** 模型调用超时（配合大 max_tokens，输出更多时预留时间）。 */
+const TIMEOUT_MS = 60_000;
+/** 输出上限：生成长 JSON（含界面层级 + 4 条建议 + 两段代码）时避免被截断导致 Unterminated string。 */
+const MAX_TOKENS = 8192;
+
+/**
+ * 从模型输出中剥离 markdown 围栏并提取 JSON 主体。
+ * 处理：```json … ```、``` … ```、无闭合围栏（截断场景）、以及前后杂质。
+ */
+function extractJsonBody(text: string): string {
+  let s = text.trim();
+  // 成对围栏：```json ... ``` 或 ``` ... ```
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fence) {
+    s = fence[1].trim();
+  } else if (s.startsWith("```")) {
+    // 无闭合围栏（输出被截断时）：去掉开头 ```json/``` 再继续
+    s = s.replace(/^```[a-z]*\s*/i, "").trim();
+  }
+  // 截取首个 { 到最后一个 }（容忍前后说明文字）
+  const start = s.indexOf("{");
+  const end = s.lastIndexOf("}");
+  if (start !== -1 && end > start) {
+    s = s.slice(start, end + 1);
+  }
+  return s;
+}
 
 /** 从模型输出中稳健地解析出 JSON 对象（容忍 markdown 围栏与前后杂质）。 */
 export function parseAnalysisJson(text: string): AnalysisResult {
   if (!text) throw new Error("模型返回为空");
-  let cleaned = text.trim();
-  // 剥离 ```json ... ``` 围栏
-  const fence = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fence) cleaned = fence[1].trim();
-  // 截取首个 { 到最后一个 }
-  const start = cleaned.indexOf("{");
-  const end = cleaned.lastIndexOf("}");
-  if (start !== -1 && end > start) {
-    cleaned = cleaned.slice(start, end + 1);
-  }
+  const cleaned = extractJsonBody(text);
   try {
     const obj = JSON.parse(cleaned) as Partial<AnalysisResult>;
     return {
@@ -47,7 +64,15 @@ export function parseAnalysisJson(text: string): AnalysisResult {
       reactSnippet: String(obj.reactSnippet ?? ""),
     };
   } catch (e) {
-    throw new Error(`模型输出无法解析为 JSON: ${(e as Error).message}`);
+    // 友好错误日志：截断显示原始内容，便于定位「截断 / 围栏 / 模型不支持 json」等问题
+    const preview =
+      text.length > 400 ? `${text.slice(0, 400)}…` : text;
+    console.error("[ai] JSON 解析失败:", (e as Error).message);
+    console.error("[ai] 剥离围栏后内容预览:", JSON.stringify(cleaned.slice(0, 400)));
+    console.error("[ai] 模型原始输出预览:", JSON.stringify(preview));
+    throw new Error(
+      `模型输出无法解析为 JSON（可能是 max_tokens 截断或格式问题）。原始输出前 300 字符：${preview.slice(0, 300)}`
+    );
   }
 }
 
@@ -103,7 +128,7 @@ export async function analyzeDesign(
       {
         model: env.llm.model,
         temperature: 0.2,
-        max_tokens: 2048,
+        max_tokens: MAX_TOKENS,
         messages,
         response_format: { type: "json_object" },
       },
@@ -117,7 +142,7 @@ export async function analyzeDesign(
         {
           model: env.llm.model,
           temperature: 0.2,
-          max_tokens: 2048,
+          max_tokens: MAX_TOKENS,
           messages,
         },
         { signal: AbortSignal.timeout(TIMEOUT_MS) }
