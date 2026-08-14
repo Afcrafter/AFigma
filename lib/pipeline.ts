@@ -23,6 +23,7 @@ const logger = console;
 
 /** 处理一条企微文本消息（含或不含 Figma 链接）。 */
 export async function runPipeline(msg: NormalizedWechatMessage): Promise<void> {
+  const startedAt = Date.now();
   try {
     const link = parseFigmaUrl(msg.content);
     if (!link) {
@@ -47,7 +48,14 @@ export async function runPipeline(msg: NormalizedWechatMessage): Promise<void> {
     logger.info(`[pipeline] Figma 数据就绪，开始 LLM 分析: ${metadata.name}`);
     const analysis = await analyzeDesign(exportRes.imageUrl, metadata, tokens);
 
-    const markdown = formatAnalysisMarkdown(analysis, metadata, [exportRes], tokens);
+    const figmaUrl = `https://www.figma.com/file/${target.fileKey}?node-id=${encodeURIComponent(target.nodeId)}`;
+    const markdown = formatAnalysisMarkdown(analysis, {
+      nodeInfo: metadata,
+      exports: [exportRes],
+      tokens,
+      figmaUrl,
+      durationMs: Date.now() - startedAt,
+    });
     await safeSend(msg.fromUserName, markdown);
     logger.info(`[pipeline] 分析结果已推送: ${msg.fromUserName}`);
   } catch (e) {
