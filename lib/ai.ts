@@ -1,6 +1,8 @@
 /**
  * 多模态 UI 设计分析：把 Figma 高清切图 URL 投喂给 OpenAI 兼容的视觉大模型。
- * 读取 LLM_API_KEY / LLM_BASE_URL / LLM_MODEL（用户自建端点，模型需支持图片输入）。
+ * 读取 OPENROUTER_API_KEY（或 LLM_API_KEY）+ LLM_BASE_URL + LLM_MODEL，
+ * 兼容 OpenRouter 与自建端点（模型需支持图片输入）。
+ * 已启用 response_format=json_object，并对模型输出做围栏剥离 + try-catch 健壮解析。
  */
 import OpenAI from "openai";
 import { env } from "./env";
@@ -85,7 +87,9 @@ export async function analyzeDesign(
   tokens?: FigmaDesignTokens
 ): Promise<AnalysisResult> {
   if (!env.llm.apiKey || !env.llm.baseURL || !env.llm.model) {
-    throw new Error("LLM 环境变量未配置完整（LLM_API_KEY / LLM_BASE_URL / LLM_MODEL）");
+    throw new Error(
+      "LLM 环境变量未配置完整（OPENROUTER_API_KEY 或 LLM_API_KEY / LLM_BASE_URL / LLM_MODEL）"
+    );
   }
   const client = new OpenAI({
     apiKey: env.llm.apiKey,

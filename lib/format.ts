@@ -99,7 +99,7 @@ export function formatAnalysisMarkdown(
   const meta: string[] = [];
   if (nodeInfo?.name) meta.push(`画板名称：**${nodeInfo.name}**`);
   if (nodeInfo?.width) meta.push(`尺寸：**${nodeInfo.width}x${nodeInfo.height ?? "?"}**`);
-  lines.push(`> ${meta.join(" | ")} | ${info("已完成解析")}`);
+  lines.push(`> ${meta.join(" | ")} | ${info("解析完成")}`);
   lines.push("");
 
   // 1️⃣ 界面层级
@@ -168,7 +168,7 @@ export function formatAnalysisMarkdown(
   // 页脚：耗时 + 来源
   const footer: string[] = [];
   if (durationMs != null) {
-    footer.push(comment(`耗时 ${(durationMs / 1000).toFixed(1)}s`));
+    footer.push(comment(`耗时统计：${(durationMs / 1000).toFixed(1)}s`));
   }
   footer.push(comment("由企业微信 + Figma + LLM 自动生成"));
   lines.push(footer.join(" · "));

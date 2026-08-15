@@ -12,7 +12,7 @@
    ▼
 企微回调 POST ──验签→ 解密 → 提取链接
    │                 │
-   │  立即返回 success（满足 5 秒约束）   after() 后台任务
+   │  立即返回 success（满足 5 秒约束）   waitUntil() 后台保活
    ▼
    ┌────────────────────────────────────────────┐
    │ Figma API（X-Figma-Token）                  │
@@ -35,18 +35,21 @@
 
 | 变量 | 说明 |
 |------|------|
-| `WECHAT_CORPID` | 企业 ID（企微管理后台 → 我的企业） |
+| `WECHAT_CORP_ID` | 企业 ID（管理后台 → 我的企业；旧名 `WECHAT_CORPID` 仍兼容） |
 | `WECHAT_AGENT_ID` | 自建应用 AgentId |
 | `WECHAT_SECRET` | 应用 Secret |
-| `WECHAT_TOKEN` | 回调验证 Token |
-| `WECHAT_ENCODING_AES_KEY` | 回调加解密 Key（43 位 base64，无等号） |
+| `WECHAT_TOKEN` | 回调验证 Token（约 25 位随机串） |
+| `WECHAT_ENCODING_AES_KEY` | 回调加解密 Key（**固定 43 位** base64，无等号） |
+| `WECHAT_API_BASE_URL` | （可选）企微 API 前缀，默认 `https://qyapi.weixin.qq.com`；触发 60020 时指向固定 IP 反代 |
 | `FIGMA_ACCESS_TOKEN` | Figma 个人访问令牌 |
-| `LLM_API_KEY` | 大模型 API Key |
-| `LLM_BASE_URL` | OpenAI 兼容端点 Base URL |
-| `LLM_MODEL` | **必须选择支持图片输入的视觉模型**（如 qwen-vl-plus） |
+| `OPENROUTER_API_KEY` | OpenRouter API Key（与 `LLM_API_KEY` 二选一） |
+| `LLM_API_KEY` | （可选）自建 OpenAI 兼容端点 API Key |
+| `LLM_BASE_URL` | （可选）OpenAI 兼容端点 Base URL |
+| `LLM_MODEL` | **必须选择支持图片输入的视觉模型**，推荐 `google/gemini-2.0-flash-001`（或 qwen-2.5-vl） |
 
 > ⚠️ 托管的 DeepSeek API 只支持文本、不支持图片，无法用于 UI 设计图分析，请勿选择。
 > 若配置的模型不支持 `image_url`，分析会失败并在企微里收到明确报错提示。
+> 配置 `OPENROUTER_API_KEY` 时无需再填 `LLM_BASE_URL`（自动指向 `https://openrouter.ai/api/v1`）。
 
 ## 本地开发
 
@@ -71,7 +74,7 @@ npm run build           # 生产构建
 ## 部署到 Vercel
 
 1. 把项目推送到 GitHub，在 Vercel 导入（Framework 自动识别 Next.js）。
-2. 在 **Settings → Environment Variables** 配置全部 9 个变量。
+2. 在 **Settings → Environment Variables** 配置全部必填变量（参考 `.env.example`）。
 3. 部署后获得域名，如 `https://xxx.vercel.app`。
 
 回调路由：
@@ -108,7 +111,7 @@ https://www.figma.com/design/abc123/页面?node-id=0%3A1
 ## 目录结构
 
 ```
-app/api/wechat/route.ts   # 网关入口：GET 握手 / POST 回调 / after() 异步
+app/api/wechat/route.ts   # 网关入口：GET 握手 / POST 回调 / waitUntil() 异步保活
 app/api/health/route.ts   # 健康检查
 lib/
   env.ts                  # 环境变量读取 + 校验

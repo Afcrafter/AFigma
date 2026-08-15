@@ -55,7 +55,7 @@ console.log("企业微信回调自测报文");
 console.log("==============================================");
 if (!env.wechat.encodingAESKey) {
   console.log("⚠️  未检测到 .env.local，使用内置测试值。请把以下配置写入 .env.local：\n");
-  console.log(`WECHAT_CORPID=${TEST_CORPID}`);
+  console.log(`WECHAT_CORP_ID=${TEST_CORPID}`);
   console.log(`WECHAT_TOKEN=${TEST_TOKEN}`);
   console.log(`WECHAT_ENCODING_AES_KEY=${TEST_AES_KEY}`);
   console.log("");

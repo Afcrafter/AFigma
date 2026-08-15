@@ -117,6 +117,7 @@ export async function POST(req: Request): Promise<Response> {
     );
   }
 
-  // 立即回包 success，满足企微 5 秒约束
-  return new Response("success");
+  // 立即回包 success（显式 200），满足企微 5 秒回包约束，
+  // 防止云端实例等待超时提前挂起，切断 waitUntil 后台流程
+  return new Response("success", { status: 200 });
 }

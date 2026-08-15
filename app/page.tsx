@@ -12,13 +12,14 @@ function mask(v: string): string {
 export default function Home() {
   const missing = missingEnvVars();
   const rows: [string, string, boolean][] = [
-    ["WECHAT_CORPID", mask(env.wechat.corpid), !!env.wechat.corpid],
+    ["WECHAT_CORP_ID", mask(env.wechat.corpid), !!env.wechat.corpid],
     ["WECHAT_AGENT_ID", env.wechat.agentId, !!env.wechat.agentId],
     ["WECHAT_SECRET", mask(env.wechat.secret), !!env.wechat.secret],
     ["WECHAT_TOKEN", mask(env.wechat.token), !!env.wechat.token],
     ["WECHAT_ENCODING_AES_KEY", mask(env.wechat.encodingAESKey), !!env.wechat.encodingAESKey],
+    ["WECHAT_API_BASE_URL", env.wechat.apiBaseUrl, true],
     ["FIGMA_ACCESS_TOKEN", mask(env.figma.accessToken), !!env.figma.accessToken],
-    ["LLM_API_KEY", mask(env.llm.apiKey), !!env.llm.apiKey],
+    ["OPENROUTER_API_KEY / LLM_API_KEY", mask(env.llm.apiKey), !!env.llm.apiKey],
     ["LLM_BASE_URL", env.llm.baseURL, !!env.llm.baseURL],
     ["LLM_MODEL", env.llm.model, !!env.llm.model],
   ];

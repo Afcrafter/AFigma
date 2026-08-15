@@ -20,7 +20,9 @@ const FIGMA_BASE = "https://api.figma.com/v1";
  * node-id 支持 0%3A1 / 0:1（冒号）与新版 0-1（连字符，纯数字分隔时转冒号）。
  */
 export function parseFigmaUrl(raw: string): FigmaLink | null {
-  const m = raw.match(/figma\.com\/(?:file|design)\/([A-Za-z0-9_-]+)/i);
+  const m = raw.match(
+    /\b(?:https?:\/\/)?(?:www\.)?figma\.com\/(?:file|design)\/([A-Za-z0-9_-]+)/i
+  );
   if (!m) return null;
   const fileKey = m[1];
   const query = raw.split("?")[1] ?? "";
@@ -66,19 +68,83 @@ function handleResponse(res: Response, ctx: string): Promise<any> {
   });
 }
 
-/** 带 429 退避重试（1 次）的 Figma 请求。 */
+/** 429 限流时最多重试次数（含首次请求共发送 1 + MAX_429_RETRIES 次）。 */
+const MAX_429_RETRIES = 3;
+/** 无 Retry-After 头时默认退避时长（毫秒）。 */
+const RETRY_BASE_MS = 2000;
+/** 单次 Figma 请求超时（毫秒），防止挂起占满 maxDuration。 */
+const FIGMA_TIMEOUT_MS = 45_000;
+
+/**
+ * 带 429 指数退避重试（最多 3 次）的 Figma 请求：
+ *  - 收到 429 时优先读取 `Retry-After` 头，缺失则默认退避 2 秒
+ *  - 每次失败按 base * 2^attempt 指数拉长退避间隔，规避高频调试触发风控
+ *  - 每次请求带 AbortSignal 超时，避免挂起
+ */
 async function figmaFetch(path: string, ctx: string): Promise<any> {
   const url = `${FIGMA_BASE}${path}`;
   const headers = { "X-Figma-Token": env.figma.accessToken };
-  const res = await fetch(url, { headers });
-  if (res.status === 429) {
-    const retryAfter = Number(res.headers.get("retry-after") ?? "2");
-    await sleep(Math.max(1, Math.min(retryAfter, 5)) * 1000);
-    const res2 = await fetch(url, { headers });
-    return handleResponse(res2, ctx);
+  for (let attempt = 0; attempt <= MAX_429_RETRIES; attempt++) {
+    const res = await fetch(url, {
+      headers,
+      signal: AbortSignal.timeout(FIGMA_TIMEOUT_MS),
+    });
+    if (res.status === 429 && attempt < MAX_429_RETRIES) {
+      const retryAfterSec = Number(res.headers.get("retry-after"));
+      const baseMs =
+        Number.isFinite(retryAfterSec) && retryAfterSec > 0
+          ? retryAfterSec * 1000
+          : RETRY_BASE_MS;
+      const delayMs = Math.min(baseMs, 15_000) * 2 ** attempt;
+      console.warn(`[figma] 429 限流，${delayMs}ms 后第 ${attempt + 1} 次重试（${ctx}）`);
+      await sleep(delayMs);
+      continue;
+    }
+    return handleResponse(res, ctx);
   }
-  return handleResponse(res, ctx);
+  throw new Error(`Figma 接口持续 429 限流（已重试 ${MAX_429_RETRIES} 次）：${ctx}`);
 }
+
+/* ============ 短期 TTL 缓存（杜绝高频调试触发风控） ============ */
+
+interface CacheEntry<T> {
+  value: T;
+  expiresAt: number;
+}
+
+/** 简单 TTL 缓存：相同 fileKey+nodeId 的元数据 / 切图在 TTL 内直接命中，不再请求 Figma。 */
+function createTtlCache<T>(ttlMs: number) {
+  const store = new Map<string, CacheEntry<T>>();
+  return {
+    get(key: string): T | undefined {
+      const entry = store.get(key);
+      if (!entry) return undefined;
+      if (Date.now() >= entry.expiresAt) {
+        store.delete(key);
+        return undefined;
+      }
+      return entry.value;
+    },
+    set(key: string, value: T): void {
+      store.set(key, { value, expiresAt: Date.now() + ttlMs });
+      // 懒清理：仅当条目超阈值时扫描清除过期项，防止内存无限增长
+      if (store.size > 500) {
+        for (const [k, e] of store) {
+          if (Date.now() >= e.expiresAt) store.delete(k);
+        }
+      }
+    },
+    clear(): void {
+      store.clear();
+    },
+  };
+}
+
+/** 元数据 / 切图导出 / Design Tokens 短期缓存，TTL 60 秒。 */
+const CACHE_TTL_MS = 60_000;
+const metadataCache = createTtlCache<FigmaNodeInfo>(CACHE_TTL_MS);
+const exportCache = createTtlCache<FigmaExport>(CACHE_TTL_MS);
+const tokensCache = createTtlCache<FigmaDesignTokens>(CACHE_TTL_MS);
 
 /* ============ REST API ============ */
 
@@ -104,6 +170,10 @@ export async function getNodeMetadata(
   fileKey: string,
   nodeId: string
 ): Promise<FigmaNodeInfo> {
+  const cacheKey = `metadata:${fileKey}:${nodeId}`;
+  const cached = metadataCache.get(cacheKey);
+  if (cached) return cached;
+
   const data = await figmaFetch(
     `/files/${fileKey}/nodes?ids=${encodeURIComponent(nodeId)}`,
     `file=${fileKey} node=${nodeId}`
@@ -115,7 +185,7 @@ export async function getNodeMetadata(
   }
   const acc = { fills: [] as string[], fonts: [] as string[] };
   collectStyle(doc, acc);
-  return {
+  const info: FigmaNodeInfo = {
     nodeId,
     name: doc.name ?? "",
     type: doc.type,
@@ -125,10 +195,16 @@ export async function getNodeMetadata(
     fonts: [...new Set(acc.fonts)].slice(0, 8),
     childCount: doc.children?.length ?? 0,
   };
+  metadataCache.set(cacheKey, info);
+  return info;
 }
 
-/** 获取文件 Design Tokens（颜色 / 排版变量）。 */
+/** 获取文件 Design Tokens（颜色 / 排版变量），按 fileKey 走 TTL 缓存。 */
 export async function getDesignTokens(fileKey: string): Promise<FigmaDesignTokens> {
+  const cacheKey = `tokens:${fileKey}`;
+  const cached = tokensCache.get(cacheKey);
+  if (cached) return cached;
+
   const data = await figmaFetch(
     `/files/${fileKey}/variables/local`,
     `variables file=${fileKey}`
@@ -145,16 +221,27 @@ export async function getDesignTokens(fileKey: string): Promise<FigmaDesignToken
       typography.push({ name: v.name, value: String(firstVal) });
     }
   }
-  return { colors: colors.slice(0, 12), typography: typography.slice(0, 12) };
+  const result: FigmaDesignTokens = {
+    colors: colors.slice(0, 12),
+    typography: typography.slice(0, 12),
+  };
+  tokensCache.set(cacheKey, result);
+  return result;
 }
 
 /** 导出节点高清 PNG（scale=2）。返回图片 URL（签名约 30 分钟有效）。 */
 export async function exportImage(fileKey: string, nodeId: string): Promise<FigmaExport> {
+  const cacheKey = `export:${fileKey}:${nodeId}`;
+  const cached = exportCache.get(cacheKey);
+  if (cached) return cached;
+
   const q = `ids=${encodeURIComponent(nodeId)}&format=png&scale=2`;
   const data = await figmaFetch(`/images/${fileKey}?${q}`, `export node=${nodeId}`);
   const url = data?.images?.[nodeId];
   if (!url) throw new Error(`Figma 切图导出失败（未返回图片 URL）：${nodeId}`);
-  return { nodeId, imageUrl: url, format: "png" };
+  const result: FigmaExport = { nodeId, imageUrl: url, format: "png" };
+  exportCache.set(cacheKey, result);
+  return result;
 }
 
 /**

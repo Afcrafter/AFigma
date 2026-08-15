@@ -1,6 +1,9 @@
 /**
  * 企业微信 API 客户端：access_token 获取（带缓存）+ 应用消息发送。
  *
+ * API 前缀默认 `https://qyapi.weixin.qq.com`，可通过 `WECHAT_API_BASE_URL`
+ * 指向固定 IP 反代，规避 60020（IP 白名单）拦截。
+ *
  * 错误处理约定：
  *  - 发送接口返回非 0 errcode（如 60020）→ 抛 WechatApiError（携带 errcode），
  *    明确中断流程，绝不静默吞掉。
@@ -10,8 +13,6 @@
  */
 import { env } from "./env";
 import type { WechatSendResult } from "../types/wechat";
-
-const WECHAT_BASE = "https://qyapi.weixin.qq.com";
 
 /** 企微 API 业务错误：携带 errcode，便于调用方识别与向上反馈。 */
 export class WechatApiError extends Error {
@@ -41,7 +42,7 @@ export async function getAccessToken(force = false): Promise<string> {
     return cachedToken;
   }
   const url =
-    `${WECHAT_BASE}/cgi-bin/gettoken` +
+    `${env.wechat.apiBaseUrl}/cgi-bin/gettoken` +
     `?corpid=${encodeURIComponent(env.wechat.corpid)}` +
     `&corpsecret=${encodeURIComponent(env.wechat.secret)}`;
   const res = await fetch(url);
@@ -84,7 +85,7 @@ async function sendWithRetry(
     try {
       const token = await getAccessToken(attempt > 0);
       const res = await fetch(
-        `${WECHAT_BASE}/cgi-bin/message/send?access_token=${token}`,
+        `${env.wechat.apiBaseUrl}/cgi-bin/message/send?access_token=${token}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
