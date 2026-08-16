@@ -23,8 +23,6 @@ const SYSTEM_PROMPT = `你是一位资深 UI 设计师与前端工程师。请�
 const TIMEOUT_MS = 90_000;
 /** 输出上限：2048，确保快速生成核心结构，不超长拖慢耗时。 */
 const MAX_TOKENS = 2048;
-/** 截图分析专用输出上限：1500，兼顾完整 JSON 与快速响应。 */
-const SCREENSHOT_MAX_TOKENS = 1500;
 
 /**
  * 从模型输出中剥离 markdown 围栏并提取 JSON 主体。
@@ -173,25 +171,35 @@ export async function analyzeDesign(
   return parseAnalysisJson(content);
 }
 
-/** 画板截图分析专用 Prompt（绕过 Figma API，直连视觉模型）。 */
-const SCREENSHOT_SYSTEM_PROMPT = `你是一个资深 UI/UX 前端工程师。请详细分析用户提供的画板截图，输出严格的 JSON 对象（不要输出任何其他文字或 markdown 围栏），结构如下：
-{
-  "componentType": "组件类型，如：手风琴折叠面板 (Accordion)、卡片 (Card)、表单 (Form) 等",
-  "structure": "结构与组件规范，用 3 行概括（以 \\n 分隔）：第一行容器规范（圆角/边框类名+说明）、第二行间距排版（space-y/p 等类名）、第三行交互状态（展开/收起/Hover/Active）",
-  "colors": [{"name":"容器背景","value":"#F9FAFB","note":"灰色浅底"},{"name":"标题/图标","value":"#111827","note":"Font-Semibold"},{"name":"正文描述","value":"#4B5563","note":"Text-Sm 较淡"}],
-  "usabilityScore": 8.5,
-  "suggestions": ["建议1（含具体 Tailwind 类名）", "建议2"],
-  "tailwindCore": "一行最核心的容器 Tailwind class 组合，如 className=\\"p-5 bg-white rounded-2xl border border-gray-200 transition-all\\""
-}
-要求：
-- 每个字段的描述请用简明扼要的一两句话讲完，必须保证输出完整的语句，严禁中途截断
-- 必须提取具体的 UI 数值与特征：组件类型、关键 Tokens（圆角大小如 rounded-xl/2xl、边框色、背景色、文字层级）、交互与状态
-- colors 最多 3 项，必须给出具体色值（HEX）与用途说明
-- tailwindCore 只给一行最核心的容器类名组合
-- usabilityScore 是 0-10 的数字（可带一位小数）；suggestions 至少 2 条、最多 3 条`;
+/** 画板截图分析专用 Prompt：直接输出企微 Markdown（不经 JSON 中转，杜绝字段截断丢失）。 */
+const SCREENSHOT_SYSTEM_PROMPT = `你是一个资深 UI/UX 前端工程师。请根据用户提供的 UI 截图，直接严格按照以下 Markdown 格式输出精炼的设计规范速览（字数控制在 250 字以内，确保每句话完整，严禁截断）：
 
-/** 直接分析画板截图（Data URL），跳过 Figma API。 */
-export async function analyzeScreenshot(imageDataUrl: string): Promise<AnalysisResult> {
+## 🎨 UI 视觉与设计规范速览
+
+> 组件类型：[一句话说明组件类型] · 可用性评分：<font color="info">[8.5 / 10]</font>
+
+**📐 结构与组件规范**
+• 容器层级：[如 rounded-2xl、边框与阴影效果]
+• 间距排版：[如 space-y-4、内部内边距 p-4]
+• 交互状态：[如 Hover、Active 状态表现]
+
+**🎨 提取 Design Tokens**
+• 容器背景：\`#HEX\`
+• 标题/文字：\`#HEX\`
+• 强调/边框：\`#HEX\`
+
+**💡 体验优化建议**
+1. [第 1 条具体建议]
+2. [第 2 条具体建议]
+
+**⚡ 核心 Tailwind 原子类**
+\`div className="[提取最核心的一行 class 组合]"\``;
+
+/**
+ * 直接分析画板截图（Data URL），绕过 Figma API。
+ * 模型直接输出排版好的企微 Markdown，不经 JSON 中转，杜绝字段截断丢失。
+ */
+export async function analyzeScreenshot(imageDataUrl: string): Promise<string> {
   if (!env.llm.apiKey || !env.llm.baseURL || !env.llm.model) {
     throw new Error(
       "LLM 环境变量未配置完整（OPENROUTER_API_KEY 或 LLM_API_KEY / LLM_BASE_URL / LLM_MODEL）"
@@ -207,40 +215,17 @@ export async function analyzeScreenshot(imageDataUrl: string): Promise<AnalysisR
     {
       role: "user",
       content: [
-        { type: "text", text: "请分析这张画板截图，提取设计规范并生成 Tailwind/React 代码：" },
+        { type: "text", text: "请分析这张 UI 截图，按系统模板输出设计规范速览 Markdown：" },
         { type: "image_url", image_url: { url: imageDataUrl } },
       ],
     },
   ];
 
-  let res: OpenAI.Chat.Completions.ChatCompletion;
-  try {
-    res = await client.chat.completions.create(
-      {
-        model: env.llm.model,
-        temperature: 0.2,
-        max_tokens: SCREENSHOT_MAX_TOKENS,
-        messages,
-        response_format: { type: "json_object" },
-      },
-      { signal: AbortSignal.timeout(TIMEOUT_MS) }
-    );
-  } catch (err) {
-    const msg = (err as Error).message || String(err);
-    if (/response_format|json_object|unsupported|not support/i.test(msg)) {
-      res = await client.chat.completions.create(
-        {
-          model: env.llm.model,
-          temperature: 0.2,
-          max_tokens: SCREENSHOT_MAX_TOKENS,
-          messages,
-        },
-        { signal: AbortSignal.timeout(TIMEOUT_MS) }
-      );
-    } else {
-      throw new Error(`LLM 截图分析失败: ${msg}`);
-    }
-  }
-  const content = res.choices?.[0]?.message?.content ?? "";
-  return parseAnalysisJson(content);
+  const res = await client.chat.completions.create({
+    model: env.llm.model,
+    temperature: 0.2,
+    max_tokens: MAX_TOKENS,
+    messages,
+  });
+  return res.choices?.[0]?.message?.content ?? "";
 }

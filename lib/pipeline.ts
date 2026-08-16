@@ -90,17 +90,14 @@ export async function runPipeline(msg: NormalizedWechatMessage): Promise<boolean
  * 完全绕过 Figma API，避免限流。
  */
 export async function runImagePipeline(msg: NormalizedWechatMessage): Promise<boolean> {
-  const startedAt = Date.now();
   try {
     // 发送"处理中"提示
     await safeSend(msg.fromUserName, formatProcessingMarkdown("截图"));
 
     // 下载图片并转为 Data URL（PicUrl 优先，回退 media/get）
     const dataUrl = await fetchImageDataUrl(msg.picUrl ?? "", msg.mediaId);
-    const analysis = await analyzeScreenshot(dataUrl);
-    const markdown = formatAnalysisMarkdown(analysis, {
-      durationMs: Date.now() - startedAt,
-    });
+    // analyzeScreenshot 直接返回排版好的企微 Markdown（不经 JSON 中转）
+    const markdown = await analyzeScreenshot(dataUrl);
 
     // 最终结果：发送失败必须抛错，由外层 catch 向用户反馈
     try {
