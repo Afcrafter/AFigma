@@ -19,10 +19,10 @@ const SYSTEM_PROMPT = `你是一位资深 UI 设计师与前端工程师。请�
 }
 注意：usabilityScore 是 0-10 的整数；suggestions 至少 2 条、最多 4 条；代码片段保持简洁可读。`;
 
-/** 模型调用超时（配合大 max_tokens，输出更多时预留时间）。 */
-const TIMEOUT_MS = 60_000;
-/** 输出上限：生成长 JSON（含界面层级 + 4 条建议 + 两段代码）时避免被截断导致 Unterminated string。 */
-const MAX_TOKENS = 8192;
+/** 模型调用超时（90 秒），为视觉推理预留充足时间。 */
+const TIMEOUT_MS = 90_000;
+/** 输出上限：2048，确保快速生成核心结构，不超长拖慢耗时。 */
+const MAX_TOKENS = 2048;
 
 /**
  * 从模型输出中剥离 markdown 围栏并提取 JSON 主体。

@@ -38,7 +38,11 @@ export const env = {
     baseURL:
       process.env.LLM_BASE_URL ||
       (process.env.OPENROUTER_API_KEY ? "https://openrouter.ai/api/v1" : ""),
-    model: process.env.LLM_MODEL ?? "",
+    // 模型：OPENROUTER_MODEL 优先，其次 LLM_MODEL，默认 qwen/qwen-2.5-vl-72b-instruct
+    model:
+      process.env.OPENROUTER_MODEL ||
+      process.env.LLM_MODEL ||
+      "qwen/qwen-2.5-vl-72b-instruct",
   },
 };
 
