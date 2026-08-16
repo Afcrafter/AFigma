@@ -10,7 +10,11 @@ import type {
   FigmaNodeInfo,
 } from "../types/wechat";
 
-const FIGMA_BASE = "https://api.figma.com/v1";
+/**
+ * Figma API 基址（代理 Base URL）：通过 FIGMA_API_BASE_URL 可指向 VPS 独立 IP 反代，
+ * 破除 Vercel 共享出口 IP 的频控限制；默认回退官方域名。
+ */
+const FIGMA_BASE_URL = (process.env.FIGMA_API_BASE_URL || "https://api.figma.com").replace(/\/+$/, "");
 
 /* ============ 链接解析 ============ */
 
@@ -58,11 +62,18 @@ function rgbToHex(c: { r: number; g: number; b: number }): string {
   return `#${to(c.r)}${to(c.g)}${to(c.b)}`;
 }
 
+/** Figma 限流错误：pipeline 识别后给用户友好提示。 */
+export class FigmaRateLimitError extends Error {
+  constructor(message = "Figma 官方频控中，请等待 1 分钟后再试") {
+    super(message);
+    this.name = "FigmaRateLimitError";
+  }
+}
+
 function handleResponse(res: Response, ctx: string): Promise<any> {
   if (res.ok) return res.json() as Promise<any>;
   if (res.status === 403) throw new Error(`Figma 鉴权失败(403)：请检查 FIGMA_ACCESS_TOKEN（${ctx}）`);
   if (res.status === 404) throw new Error(`Figma 资源不存在(404)：${ctx}（文件被删除或无访问权限）`);
-  if (res.status === 429) throw new Error(`Figma 请求过于频繁(429)：${ctx}`);
   return res.json().catch(() => ({})).then((data) => {
     throw new Error(`Figma 请求失败(${res.status}) ${ctx}: ${JSON.stringify(data).slice(0, 200)}`);
   });
@@ -70,36 +81,56 @@ function handleResponse(res: Response, ctx: string): Promise<any> {
 
 /** 429 限流时最多重试次数（含首次请求共发送 1 + MAX_429_RETRIES 次）。 */
 const MAX_429_RETRIES = 2;
-/** 无 Retry-After 头时默认退避时长（毫秒）：第 1 次 3s、第 2 次 6s。 */
-const RETRY_BASE_MS = 3000;
+/** 无 Retry-After 头时默认退避时长（毫秒）：第 1 次 2s、第 2 次 4s。 */
+const RETRY_BASE_MS = 2000;
+/** Retry-After 超过该秒数则不再重试，直接快速失败（避免占满 Serverless 时长）。 */
+const RETRY_MAX_SEC = 10;
 /** 单次 Figma 请求超时（毫秒），防止挂起占满 maxDuration。 */
 const FIGMA_TIMEOUT_MS = 45_000;
 
+/** 标准请求头：Token / UA / Accept。 */
+function figmaHeaders(): Record<string, string> {
+  return {
+    "X-Figma-Token": env.figma.accessToken,
+    "User-Agent": "FigmaWecomBot/1.0 (Node.js/Next.js)",
+    Accept: "application/json",
+  };
+}
+
 /**
- * 带 429 指数退避重试（最多 2 次）的 Figma 请求：
- *  - 收到 429 时优先读取 `Retry-After` 头，缺失则默认 3s 起步
- *  - 等待阶梯：3s → 6s（base * 2^attempt），累计等待 9s 远小于 60s，
- *    避免单次请求累计等待过长导致 Vercel 超时
+ * 带 429 退避重试（最多 2 次）的 Figma 请求：
+ *  - Retry-After 超过 10s：不再重试，直接抛 FigmaRateLimitError 快速失败
+ *  - 等待阶梯：2s → 4s（base * 2^attempt），累计最多 6s，杜绝 Vercel 挂起
  *  - 每次请求带 AbortSignal 超时，避免挂起
  */
 async function figmaFetch(path: string, ctx: string): Promise<any> {
-  const url = `${FIGMA_BASE}${path}`;
-  const headers = { "X-Figma-Token": env.figma.accessToken };
+  const url = `${FIGMA_BASE_URL}/v1${path}`;
+  console.log("[figma] 发起请求:", url);
   for (let attempt = 0; attempt <= MAX_429_RETRIES; attempt++) {
     const res = await fetch(url, {
-      headers,
+      headers: figmaHeaders(),
       signal: AbortSignal.timeout(FIGMA_TIMEOUT_MS),
     });
-    if (res.status === 429 && attempt < MAX_429_RETRIES) {
+    if (res.status === 429) {
       const retryAfterSec = Number(res.headers.get("retry-after"));
-      const baseMs =
-        Number.isFinite(retryAfterSec) && retryAfterSec > 0
-          ? retryAfterSec * 1000
-          : RETRY_BASE_MS;
-      const delayMs = Math.min(baseMs, 15_000) * 2 ** attempt;
-      console.warn(`[figma] 429 限流，${delayMs}ms 后第 ${attempt + 1} 次重试（${ctx}）`);
-      await sleep(delayMs);
-      continue;
+      // Retry-After 缺失或 ≤10s：按阶梯退避重试
+      const canRetry =
+        attempt < MAX_429_RETRIES &&
+        (!Number.isFinite(retryAfterSec) ||
+          retryAfterSec <= RETRY_MAX_SEC ||
+          retryAfterSec <= 0);
+      if (canRetry) {
+        const baseMs =
+          Number.isFinite(retryAfterSec) && retryAfterSec > 0
+            ? retryAfterSec * 1000
+            : RETRY_BASE_MS;
+        const delayMs = Math.min(baseMs, 10_000) * 2 ** attempt;
+        console.warn(`[figma] 429 限流，${delayMs}ms 后第 ${attempt + 1} 次重试（${ctx}）`);
+        await sleep(delayMs);
+        continue;
+      }
+      // 重试耗尽或 Retry-After > 10s：快速失败
+      throw new FigmaRateLimitError();
     }
     return handleResponse(res, ctx);
   }

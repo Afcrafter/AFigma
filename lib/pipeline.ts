@@ -7,13 +7,7 @@
  *  - 辅助提示（处理中 / 无链接）失败仅记录日志，不阻塞主流程。
  *  - runPipeline 返回 boolean：true=成功，false=失败，供调用方（after 回调）记录状态。
  */
-import {
-  parseFigmaUrl,
-  resolveTargetNodeId,
-  getNodeMetadata,
-  exportImage,
-  getDesignTokens,
-} from "./figma";
+import { parseFigmaUrl, resolveTargetNodeId, exportImage } from "./figma";
 import { analyzeDesign } from "./ai";
 import { sendMarkdown } from "./wechat-client";
 import {
@@ -25,13 +19,6 @@ import {
 import type { NormalizedWechatMessage } from "../types/wechat";
 
 const logger = console;
-
-/** Figma 两次请求之间的最小间隔（毫秒），避免瞬时并发触发限流。 */
-const FIGMA_REQUEST_GAP_MS = 500;
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 /** 处理一条企微文本消息（含或不含 Figma 链接）。返回 true=成功，false=失败。 */
 export async function runPipeline(msg: NormalizedWechatMessage): Promise<boolean> {
@@ -50,21 +37,16 @@ export async function runPipeline(msg: NormalizedWechatMessage): Promise<boolean
 
     const target = await resolveTargetNodeId(link.fileKey, link.nodeId);
 
-    // 串行获取：先拉节点元数据，间隔 500ms 再导出高清切图，规避瞬时并发限流。
-    const metadata = await getNodeMetadata(target.fileKey, target.nodeId);
-    await sleep(FIGMA_REQUEST_GAP_MS);
+    // 极致精简：仅一次切图请求，视觉模型直接识别布局/层级/色值，
+    // 不再拉取节点元数据与 Design Tokens，最大限度压低 API 消耗
     const exportRes = await exportImage(target.fileKey, target.nodeId);
-    // Design Tokens 按需拉取（失败不阻塞主流程）
-    const tokens = await getDesignTokens(target.fileKey).catch(() => undefined);
 
-    logger.info(`[pipeline] Figma 数据就绪，开始 LLM 分析: ${metadata.name}`);
-    const analysis = await analyzeDesign(exportRes.imageUrl, metadata, tokens);
+    logger.info(`[pipeline] Figma 切图就绪，开始 LLM 分析: ${target.nodeId}`);
+    const analysis = await analyzeDesign(exportRes.imageUrl);
 
     const figmaUrl = `https://www.figma.com/file/${target.fileKey}?node-id=${encodeURIComponent(target.nodeId)}`;
     const markdown = formatAnalysisMarkdown(analysis, {
-      nodeInfo: metadata,
       exports: [exportRes],
-      tokens,
       figmaUrl,
       durationMs: Date.now() - startedAt,
     });

@@ -71,8 +71,19 @@ export function formatNoLinkMarkdown(): string {
   ].join("\n");
 }
 
-/** 错误提示。 */
+/** 错误提示：识别 Figma 429 频控，给出专门友好的提示。 */
 export function formatErrorMarkdown(message: string): string {
+  if (/频控|429|Rate.?Limit/i.test(message)) {
+    return [
+      TITLE,
+      "",
+      warning("**⚠️ Figma 官方频控中**"),
+      "",
+      "请求过于频繁，请等待 **1 分钟**后再试。",
+      "",
+      comment("Figma API 有严格速率限制，稍后重发一次即可。"),
+    ].join("\n");
+  }
   return [
     TITLE,
     "",
@@ -99,7 +110,8 @@ export function formatAnalysisMarkdown(
   const meta: string[] = [];
   if (nodeInfo?.name) meta.push(`画板名称：**${nodeInfo.name}**`);
   if (nodeInfo?.width) meta.push(`尺寸：**${nodeInfo.width}x${nodeInfo.height ?? "?"}**`);
-  lines.push(`> ${meta.join(" | ")} | ${info("解析完成")}`);
+  // 精简模式下无元数据：仅保留"解析完成"状态
+  lines.push(`> ${meta.length ? meta.join(" | ") + " | " : ""}${info("解析完成")}`);
   lines.push("");
 
   // 1️⃣ 界面层级

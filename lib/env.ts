@@ -29,6 +29,8 @@ export const env = {
   },
   figma: {
     accessToken: process.env.FIGMA_ACCESS_TOKEN ?? "",
+    // 可选：Figma API 代理 Base URL（如 VPS 独立 IP 反代），默认官方域名
+    apiBaseUrl: process.env.FIGMA_API_BASE_URL || "https://api.figma.com",
   },
   llm: {
     // OpenRouter 优先；兼容自建 OpenAI 兼容端点
