@@ -11,6 +11,10 @@ export interface NormalizedWechatMessage {
   content: string; // 文本内容（text 消息）
   createTime?: string;
   event?: string; // 事件类型（msgType === "event" 时）
+  /** 图片消息：图片 URL（PicUrl） */
+  picUrl?: string;
+  /** 图片消息：临时素材 media_id */
+  mediaId?: string;
   raw: string; // 明文原文（供调试）
 }
 

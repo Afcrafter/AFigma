@@ -10,7 +10,7 @@ import { waitUntil } from "@vercel/functions";
 import { env } from "../../../lib/env";
 import { verifySignature, decrypt } from "../../../lib/wechat-crypto";
 import { parseCallbackBody, normalizePlaintext } from "../../../lib/wechat-xml";
-import { runPipeline } from "../../../lib/pipeline";
+import { runPipeline, runImagePipeline } from "../../../lib/pipeline";
 import { parseFigmaUrl } from "../../../lib/figma";
 
 // 后台任务在 Node runtime 运行；maxDuration 为后台任务提供预算（Vercel Fluid: Hobby 300s / Pro 800s）
@@ -102,19 +102,30 @@ export async function POST(req: Request): Promise<Response> {
 
   const msg = normalizePlaintext(msgText);
 
-  // 仅文本消息进入处理；去重防重试
-  if (msg.msgType === "text" && msg.content && !isDuplicate(msg.msgId)) {
-    // 是否含 Figma 链接（用于日志/过滤，pipeline 内部同样会判断）
-    const hasFigma = parseFigmaUrl(msg.content) !== null;
-    console.info(
-      `[wechat] 收到消息 user=${msg.fromUserName} hasFigma=${hasFigma} len=${msg.content.length}`
-    );
-    // Vercel 专用后台任务：记录 pipeline 成功/失败状态
-    waitUntil(
-      runPipeline(msg)
-        .then((ok) => console.info(`[wechat] pipeline 完成 ok=${ok}`))
-        .catch((e) => console.error("[wechat] pipeline 异常:", e))
-    );
+  // 去重防重试；按消息类型分发到对应后台流水线
+  if (!isDuplicate(msg.msgId)) {
+    if (msg.msgType === "image" && (msg.picUrl || msg.mediaId)) {
+      // 图片消息：直连视觉模型分析截图，完全绕过 Figma API
+      console.info(
+        `[wechat] 收到图片 user=${msg.fromUserName} picUrl=${(msg.picUrl ?? "").slice(0, 60)}`
+      );
+      waitUntil(
+        runImagePipeline(msg)
+          .then((ok) => console.info(`[wechat] 图片分析完成 ok=${ok}`))
+          .catch((e) => console.error("[wechat] 图片分析异常:", e))
+      );
+    } else if (msg.msgType === "text" && msg.content) {
+      // 文本/链接消息：Figma 链接分析（429 时引导发截图）
+      const hasFigma = parseFigmaUrl(msg.content) !== null;
+      console.info(
+        `[wechat] 收到文本 user=${msg.fromUserName} hasFigma=${hasFigma} len=${msg.content.length}`
+      );
+      waitUntil(
+        runPipeline(msg)
+          .then((ok) => console.info(`[wechat] pipeline 完成 ok=${ok}`))
+          .catch((e) => console.error("[wechat] pipeline 异常:", e))
+      );
+    }
   }
 
   // 立即回包 success（显式 200），满足企微 5 秒回包约束，

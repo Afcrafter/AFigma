@@ -7,9 +7,15 @@
  *  - 辅助提示（处理中 / 无链接）失败仅记录日志，不阻塞主流程。
  *  - runPipeline 返回 boolean：true=成功，false=失败，供调用方（after 回调）记录状态。
  */
-import { parseFigmaUrl, resolveTargetNodeId, exportImage } from "./figma";
-import { analyzeDesign } from "./ai";
+import {
+  parseFigmaUrl,
+  resolveTargetNodeId,
+  exportImage,
+  FigmaRateLimitError,
+} from "./figma";
+import { analyzeDesign, analyzeScreenshot } from "./ai";
 import { sendMarkdown } from "./wechat-client";
+import { fetchImageDataUrl } from "./media";
 import {
   formatAnalysisMarkdown,
   formatErrorMarkdown,
@@ -63,7 +69,51 @@ export async function runPipeline(msg: NormalizedWechatMessage): Promise<boolean
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     logger.error(`[pipeline] 失败: ${message}`);
+    // Figma 429 频控：引导用户改发截图，绕过 Figma API
+    let userMsg = message;
+    if (e instanceof FigmaRateLimitError) {
+      userMsg =
+        "已检测到链接，因 Figma API 频控，建议直接将画板截图（Ctrl+V）发送给我进行秒级分析！";
+    }
     // 向外层反馈错误状态：尽力把错误原因推送给用户；再失败则仅记录
+    try {
+      await sendMarkdown(msg.fromUserName, formatErrorMarkdown(userMsg));
+    } catch (sendErr) {
+      logger.error(`[pipeline] 推送错误消息也失败: ${sendErr}`);
+    }
+    return false;
+  }
+}
+
+/**
+ * 处理企微图片消息：下载截图 → 直连视觉模型分析 → 推送。
+ * 完全绕过 Figma API，避免限流。
+ */
+export async function runImagePipeline(msg: NormalizedWechatMessage): Promise<boolean> {
+  const startedAt = Date.now();
+  try {
+    // 发送"处理中"提示
+    await safeSend(msg.fromUserName, formatProcessingMarkdown("截图"));
+
+    // 下载图片并转为 Data URL（PicUrl 优先，回退 media/get）
+    const dataUrl = await fetchImageDataUrl(msg.picUrl ?? "", msg.mediaId);
+    const analysis = await analyzeScreenshot(dataUrl);
+    const markdown = formatAnalysisMarkdown(analysis, {
+      durationMs: Date.now() - startedAt,
+    });
+
+    // 最终结果：发送失败必须抛错，由外层 catch 向用户反馈
+    try {
+      await sendMarkdown(msg.fromUserName, markdown);
+    } catch (e) {
+      logger.error(`[pipeline] 截图结果推送失败: ${(e as Error).message}`);
+      throw e;
+    }
+    logger.info(`[pipeline] 截图分析已推送: ${msg.fromUserName}`);
+    return true;
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    logger.error(`[pipeline] 截图分析失败: ${message}`);
     try {
       await sendMarkdown(msg.fromUserName, formatErrorMarkdown(message));
     } catch (sendErr) {

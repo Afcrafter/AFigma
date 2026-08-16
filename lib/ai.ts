@@ -159,3 +159,70 @@ export async function analyzeDesign(
   const content = res.choices?.[0]?.message?.content ?? "";
   return parseAnalysisJson(content);
 }
+
+/** 画板截图分析专用 Prompt（绕过 Figma API，直连视觉模型）。 */
+const SCREENSHOT_SYSTEM_PROMPT = `你是一个资深 UI/UX 前端工程师。请详细分析用户提供的画板截图，提取核心设计规范（配色板、排版层级、间距、组件结构）并生成对应的 Tailwind CSS 组件代码。输出严格的 JSON 对象（不要输出任何其他文字或 markdown 围栏），结构如下：
+{
+  "interfaceLevels": "对界面信息层级结构的简述",
+  "primaryColors": ["主色调1", "主色调2", "强调色"],
+  "usabilityScore": 8,
+  "suggestions": ["可用性改进建议1", "建议2", "建议3"],
+  "tailwindSnippet": "用 Tailwind CSS 实现该界面基础布局的 JSX 代码片段",
+  "reactSnippet": "用 React 组件实现核心布局的 TypeScript 代码片段"
+}
+注意：usabilityScore 是 0-10 的整数；suggestions 至少 2 条；代码片段保持简洁可读。`;
+
+/** 直接分析画板截图（Data URL），跳过 Figma API。 */
+export async function analyzeScreenshot(imageDataUrl: string): Promise<AnalysisResult> {
+  if (!env.llm.apiKey || !env.llm.baseURL || !env.llm.model) {
+    throw new Error(
+      "LLM 环境变量未配置完整（OPENROUTER_API_KEY 或 LLM_API_KEY / LLM_BASE_URL / LLM_MODEL）"
+    );
+  }
+  const client = new OpenAI({
+    apiKey: env.llm.apiKey,
+    baseURL: env.llm.baseURL,
+    timeout: TIMEOUT_MS,
+  });
+  const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
+    { role: "system", content: SCREENSHOT_SYSTEM_PROMPT },
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "请分析这张画板截图，提取设计规范并生成 Tailwind/React 代码：" },
+        { type: "image_url", image_url: { url: imageDataUrl } },
+      ],
+    },
+  ];
+
+  let res: OpenAI.Chat.Completions.ChatCompletion;
+  try {
+    res = await client.chat.completions.create(
+      {
+        model: env.llm.model,
+        temperature: 0.2,
+        max_tokens: MAX_TOKENS,
+        messages,
+        response_format: { type: "json_object" },
+      },
+      { signal: AbortSignal.timeout(TIMEOUT_MS) }
+    );
+  } catch (err) {
+    const msg = (err as Error).message || String(err);
+    if (/response_format|json_object|unsupported|not support/i.test(msg)) {
+      res = await client.chat.completions.create(
+        {
+          model: env.llm.model,
+          temperature: 0.2,
+          max_tokens: MAX_TOKENS,
+          messages,
+        },
+        { signal: AbortSignal.timeout(TIMEOUT_MS) }
+      );
+    } else {
+      throw new Error(`LLM 截图分析失败: ${msg}`);
+    }
+  }
+  const content = res.choices?.[0]?.message?.content ?? "";
+  return parseAnalysisJson(content);
+}

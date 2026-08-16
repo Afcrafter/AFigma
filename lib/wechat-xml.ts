@@ -69,6 +69,8 @@ function normalizeXml(xml: string): NormalizedWechatMessage {
     content: extractTag(xml, "Content"),
     createTime: extractTag(xml, "CreateTime"),
     event: extractTag(xml, "Event"),
+    picUrl: extractTag(xml, "PicUrl"),
+    mediaId: extractTag(xml, "MediaId"),
     raw: xml,
   };
 }
@@ -97,6 +99,8 @@ function normalizeJson(json: string): NormalizedWechatMessage {
     content: str(data.Content),
     createTime: str(data.CreateTime),
     event: str(data.Event),
+    picUrl: str(data.PicUrl),
+    mediaId: str(data.MediaId),
     raw: json,
   };
 }
