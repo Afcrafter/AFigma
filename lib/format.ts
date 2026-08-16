@@ -2,8 +2,8 @@
  * 把 AI 分析结果格式化为企业微信 Markdown 卡片（手机端一屏速览）。
  *
  * 设计要点：
- *  - 精简输出：不直接输出几十行 JSX/HTML，只给「结构 + 配色 + 建议 + 核心类名」
- *  - 干净 Markdown：不转义 HTML 实体，代码以反引号内联类名形式展示
+ *  - 精简输出：只给「结构规范 + Design Tokens + 建议 + 核心 Tailwind 代码行」
+ *  - 干净 Markdown：不转义 HTML 实体，代码以反引号内联类名展示
  *  - 总长度控制在 300 字内，避免企微折叠与截断
  *
  * 企微 markdown 语法：
@@ -13,6 +13,7 @@
  */
 import type {
   AnalysisResult,
+  DesignTokenColor,
   FigmaDesignTokens,
   FigmaExport,
   FigmaNodeInfo,
@@ -26,7 +27,7 @@ const comment = (t: string): string => `<font color="comment">${t}</font>`;
 const warning = (t: string): string => `<font color="warning">${t}</font>`;
 
 /** 正文长度上限（字符）：链接标题另算，企微显示总长保证 <300 一屏展示。 */
-const MAX_BODY_CHARS = 270;
+const MAX_BODY_CHARS = 280;
 
 export interface AnalysisMarkdownOpts {
   nodeInfo?: FigmaNodeInfo;
@@ -52,20 +53,25 @@ function extractKeyClasses(tailwind: string): string[] {
   return [...classes].slice(0, 5);
 }
 
-/** 配色行：优先 Design Token 名称，否则用 LLM 提取的色值（带语义标签）。 */
-function colorLines(
+/** 从 tailwindSnippet 提取首个 className 内容（核心容器类名组合）。 */
+function extractCoreLine(tailwind: string): string {
+  const m = tailwind.match(/className={?["'`]([^"'`]+)["'`]/);
+  return m ? m[1].trim() : "";
+}
+
+/** 优先截图分析的 colors，其次 Design Tokens / 旧字段配色。 */
+function resolveColors(
   analysis: AnalysisResult,
   tokens?: FigmaDesignTokens
-): string[] {
+): DesignTokenColor[] {
+  if (analysis.colors?.length) return analysis.colors.slice(0, 3);
   if (tokens?.colors?.length) {
-    return tokens.colors
-      .slice(0, 3)
-      .map((c, i) => `• ${c.name || `色 ${i + 1}`}：\`${c.value}\``);
+    return tokens.colors.slice(0, 3).map((c) => ({ name: c.name, value: c.value }));
   }
   const labels = ["主色", "强调色", "中性色"];
   return (analysis.primaryColors || [])
     .slice(0, 3)
-    .map((v, i) => `• ${labels[i] || `色 ${i + 1}`}：\`${v}\``);
+    .map((v, i) => ({ name: labels[i] || `色 ${i + 1}`, value: v }));
 }
 
 /** 分析开始前的"处理中"提示。 */
@@ -117,42 +123,58 @@ export function formatErrorMarkdown(message: string): string {
   ].join("\n");
 }
 
-/** 把设计分析结果格式化为企微 markdown 速览卡片（≤300 字）。 */
+/** 把设计分析结果格式化为企微 markdown 速览卡片（≤300 字，一屏展示）。 */
 export function formatAnalysisMarkdown(
   analysis: AnalysisResult,
   opts: AnalysisMarkdownOpts = {}
 ): string {
-  const { exports, tokens, figmaUrl, durationMs } = opts;
+  const { exports, tokens, figmaUrl } = opts;
   const lines: string[] = [];
 
   lines.push(TITLE);
   lines.push("");
-  lines.push(`> 综合可用性评分：${info(`**${analysis.usabilityScore} / 10**`)}`);
+
+  // 首行：组件类型 + 综合评分（对齐样例模板）
+  const type = (analysis.componentType || analysis.interfaceLevels || "").slice(0, 30);
+  const score = info(`**${analysis.usabilityScore} / 10**`);
+  lines.push(type ? `> 组件类型：${type} · 可用性评分：${score}` : `> 综合可用性评分：${score}`);
   lines.push("");
 
-  // 📐 结构与组件
-  lines.push("**📐 结构与组件**");
-  if (analysis.interfaceLevels) {
-    lines.push(`• 布局层级：${analysis.interfaceLevels.slice(0, 30)}`);
+  // 📐 结构与组件规范（优先 structure 多行，fallback 布局层级 + 关键类名）
+  lines.push("**📐 结构与组件规范**");
+  if (analysis.structure) {
+    for (const row of analysis.structure.split("\n").map((s) => s.trim()).filter(Boolean).slice(0, 3)) {
+      lines.push(`• ${row.slice(0, 30)}`);
+    }
+  } else {
+    if (analysis.interfaceLevels) lines.push(`• 布局层级：${analysis.interfaceLevels.slice(0, 30)}`);
+    const keyClasses = extractKeyClasses(analysis.tailwindSnippet);
+    if (keyClasses.length) lines.push(`• 关键样式：\`${keyClasses.slice(0, 4).join("` `")}\``);
   }
-  const keyClasses = extractKeyClasses(analysis.tailwindSnippet);
-  if (keyClasses.length) {
-    lines.push(`• 关键样式：\`${keyClasses.slice(0, 4).join("` `")}\``);
+  lines.push("");
+
+  // 🎨 提取 Design Tokens（name / value / note）
+  lines.push("**🎨 提取 Design Tokens**");
+  const colors = resolveColors(analysis, tokens);
+  for (const c of colors.slice(0, 3)) {
+    lines.push(`• ${c.name || "色"}：\`${c.value}\`${c.note ? ` (${c.note.slice(0, 20)})` : ""}`);
   }
   lines.push("");
 
-  // 🎨 提取配色
-  lines.push("**🎨 提取配色 (Tokens)**");
-  const colors = colorLines(analysis, tokens);
-  for (const c of colors.slice(0, 3)) lines.push(c);
-  lines.push("");
-
-  // 💡 体验优化建议（最多 2 条，保证 300 字内一屏展示）
+  // 💡 体验优化建议（最多 2 条，保证 300 字内）
   if (analysis.suggestions?.length) {
     lines.push("**💡 体验优化建议**");
     analysis.suggestions
       .slice(0, 2)
       .forEach((s, i) => lines.push(`${i + 1}. ${s.slice(0, 18)}`));
+    lines.push("");
+  }
+
+  // ⚡ 核心 Tailwind 代码（单行容器类名）
+  const core = analysis.tailwindCore || extractCoreLine(analysis.tailwindSnippet);
+  if (core) {
+    lines.push("**⚡ 核心 Tailwind 代码**");
+    lines.push(`\`${core.slice(0, 80)}\``);
     lines.push("");
   }
 
@@ -162,7 +184,7 @@ export function formatAnalysisMarkdown(
   if (firstExport?.imageUrl) links.push(`[🔗 高清图](${firstExport.imageUrl})`);
   if (figmaUrl) links.push(`[📐 原稿](${figmaUrl})`);
 
-  // 正文（不含链接）控制在 ~270 字；链接标题短，企微显示总长 <300
+  // 正文控制在 ~280 字；链接标题短，企微显示总长 <300
   const body = lines.join("\n");
   const bodyTrimmed =
     body.length > MAX_BODY_CHARS ? body.slice(0, MAX_BODY_CHARS) + "…" : body;

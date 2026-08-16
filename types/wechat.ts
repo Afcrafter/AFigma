@@ -49,6 +49,13 @@ export interface FigmaExport {
   format: "png" | "svg";
 }
 
+/** Design Token 配色项。 */
+export interface DesignTokenColor {
+  name: string;
+  value: string;
+  note?: string;
+}
+
 /** 大模型设计分析结果。 */
 export interface AnalysisResult {
   interfaceLevels: string;
@@ -57,6 +64,14 @@ export interface AnalysisResult {
   suggestions: string[];
   tailwindSnippet: string;
   reactSnippet: string;
+  /** 截图分析：组件类型（如 手风琴折叠面板 Accordion） */
+  componentType?: string;
+  /** 截图分析：结构与组件规范（容器/间距/交互，多行） */
+  structure?: string;
+  /** 截图分析：Design Tokens（配色 + 语义说明） */
+  colors?: DesignTokenColor[];
+  /** 截图分析：核心 Tailwind className（一行） */
+  tailwindCore?: string;
 }
 
 /** 企微应用消息发送结果。 */

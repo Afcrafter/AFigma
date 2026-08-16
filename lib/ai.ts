@@ -23,6 +23,8 @@ const SYSTEM_PROMPT = `你是一位资深 UI 设计师与前端工程师。请�
 const TIMEOUT_MS = 90_000;
 /** 输出上限：2048，确保快速生成核心结构，不超长拖慢耗时。 */
 const MAX_TOKENS = 2048;
+/** 截图分析专用输出上限：1500，兼顾完整 JSON 与快速响应。 */
+const SCREENSHOT_MAX_TOKENS = 1500;
 
 /**
  * 从模型输出中剥离 markdown 围栏并提取 JSON 主体。
@@ -64,6 +66,17 @@ export function parseAnalysisJson(text: string): AnalysisResult {
       suggestions: Array.isArray(obj.suggestions) ? obj.suggestions.map(String) : [],
       tailwindSnippet: String(obj.tailwindSnippet ?? ""),
       reactSnippet: String(obj.reactSnippet ?? ""),
+      // 截图分析专用字段（容错默认）
+      componentType: String(obj.componentType ?? ""),
+      structure: String(obj.structure ?? ""),
+      colors: Array.isArray(obj.colors)
+        ? obj.colors.map((c) => ({
+            name: String(c?.name ?? ""),
+            value: String(c?.value ?? ""),
+            note: String(c?.note ?? ""),
+          }))
+        : [],
+      tailwindCore: String(obj.tailwindCore ?? ""),
     };
   } catch (e) {
     // 友好错误日志：截断显示原始内容，便于定位「截断 / 围栏 / 模型不支持 json」等问题
@@ -161,16 +174,21 @@ export async function analyzeDesign(
 }
 
 /** 画板截图分析专用 Prompt（绕过 Figma API，直连视觉模型）。 */
-const SCREENSHOT_SYSTEM_PROMPT = `你是一个资深 UI/UX 前端工程师。请详细分析用户提供的画板截图，提取核心设计规范（配色板、排版层级、间距、组件结构）并生成对应的 Tailwind CSS 组件代码。输出严格的 JSON 对象（不要输出任何其他文字或 markdown 围栏），结构如下：
+const SCREENSHOT_SYSTEM_PROMPT = `你是一个资深 UI/UX 前端工程师。请详细分析用户提供的画板截图，输出严格的 JSON 对象（不要输出任何其他文字或 markdown 围栏），结构如下：
 {
-  "interfaceLevels": "对界面信息层级结构的简述",
-  "primaryColors": ["主色调1", "主色调2", "强调色"],
-  "usabilityScore": 8,
-  "suggestions": ["可用性改进建议1", "建议2", "建议3"],
-  "tailwindSnippet": "用 Tailwind CSS 实现该界面基础布局的 JSX 代码片段",
-  "reactSnippet": "用 React 组件实现核心布局的 TypeScript 代码片段"
+  "componentType": "组件类型，如：手风琴折叠面板 (Accordion)、卡片 (Card)、表单 (Form) 等",
+  "structure": "结构与组件规范，用 3 行概括（以 \\n 分隔）：第一行容器规范（圆角/边框类名+说明）、第二行间距排版（space-y/p 等类名）、第三行交互状态（展开/收起/Hover/Active）",
+  "colors": [{"name":"容器背景","value":"#F9FAFB","note":"灰色浅底"},{"name":"标题/图标","value":"#111827","note":"Font-Semibold"},{"name":"正文描述","value":"#4B5563","note":"Text-Sm 较淡"}],
+  "usabilityScore": 8.5,
+  "suggestions": ["建议1（含具体 Tailwind 类名）", "建议2"],
+  "tailwindCore": "一行最核心的容器 Tailwind class 组合，如 className=\\"p-5 bg-white rounded-2xl border border-gray-200 transition-all\\""
 }
-注意：usabilityScore 是 0-10 的整数；suggestions 至少 2 条；代码片段保持简洁可读。`;
+要求：
+- 每个字段的描述请用简明扼要的一两句话讲完，必须保证输出完整的语句，严禁中途截断
+- 必须提取具体的 UI 数值与特征：组件类型、关键 Tokens（圆角大小如 rounded-xl/2xl、边框色、背景色、文字层级）、交互与状态
+- colors 最多 3 项，必须给出具体色值（HEX）与用途说明
+- tailwindCore 只给一行最核心的容器类名组合
+- usabilityScore 是 0-10 的数字（可带一位小数）；suggestions 至少 2 条、最多 3 条`;
 
 /** 直接分析画板截图（Data URL），跳过 Figma API。 */
 export async function analyzeScreenshot(imageDataUrl: string): Promise<AnalysisResult> {
@@ -201,7 +219,7 @@ export async function analyzeScreenshot(imageDataUrl: string): Promise<AnalysisR
       {
         model: env.llm.model,
         temperature: 0.2,
-        max_tokens: MAX_TOKENS,
+        max_tokens: SCREENSHOT_MAX_TOKENS,
         messages,
         response_format: { type: "json_object" },
       },
@@ -214,7 +232,7 @@ export async function analyzeScreenshot(imageDataUrl: string): Promise<AnalysisR
         {
           model: env.llm.model,
           temperature: 0.2,
-          max_tokens: MAX_TOKENS,
+          max_tokens: SCREENSHOT_MAX_TOKENS,
           messages,
         },
         { signal: AbortSignal.timeout(TIMEOUT_MS) }
