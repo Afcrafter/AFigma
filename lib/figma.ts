@@ -69,16 +69,17 @@ function handleResponse(res: Response, ctx: string): Promise<any> {
 }
 
 /** 429 限流时最多重试次数（含首次请求共发送 1 + MAX_429_RETRIES 次）。 */
-const MAX_429_RETRIES = 3;
-/** 无 Retry-After 头时默认退避时长（毫秒）。 */
-const RETRY_BASE_MS = 2000;
+const MAX_429_RETRIES = 2;
+/** 无 Retry-After 头时默认退避时长（毫秒）：第 1 次 3s、第 2 次 6s。 */
+const RETRY_BASE_MS = 3000;
 /** 单次 Figma 请求超时（毫秒），防止挂起占满 maxDuration。 */
 const FIGMA_TIMEOUT_MS = 45_000;
 
 /**
- * 带 429 指数退避重试（最多 3 次）的 Figma 请求：
- *  - 收到 429 时优先读取 `Retry-After` 头，缺失则默认退避 2 秒
- *  - 每次失败按 base * 2^attempt 指数拉长退避间隔，规避高频调试触发风控
+ * 带 429 指数退避重试（最多 2 次）的 Figma 请求：
+ *  - 收到 429 时优先读取 `Retry-After` 头，缺失则默认 3s 起步
+ *  - 等待阶梯：3s → 6s（base * 2^attempt），累计等待 9s 远小于 60s，
+ *    避免单次请求累计等待过长导致 Vercel 超时
  *  - 每次请求带 AbortSignal 超时，避免挂起
  */
 async function figmaFetch(path: string, ctx: string): Promise<any> {
@@ -140,8 +141,8 @@ function createTtlCache<T>(ttlMs: number) {
   };
 }
 
-/** 元数据 / 切图导出 / Design Tokens 短期缓存，TTL 60 秒。 */
-const CACHE_TTL_MS = 60_000;
+/** 元数据 / 切图导出 / Design Tokens 短期缓存，TTL 5 分钟。 */
+const CACHE_TTL_MS = 300_000;
 const metadataCache = createTtlCache<FigmaNodeInfo>(CACHE_TTL_MS);
 const exportCache = createTtlCache<FigmaExport>(CACHE_TTL_MS);
 const tokensCache = createTtlCache<FigmaDesignTokens>(CACHE_TTL_MS);

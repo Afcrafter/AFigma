@@ -26,6 +26,13 @@ import type { NormalizedWechatMessage } from "../types/wechat";
 
 const logger = console;
 
+/** Figma 两次请求之间的最小间隔（毫秒），避免瞬时并发触发限流。 */
+const FIGMA_REQUEST_GAP_MS = 500;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /** 处理一条企微文本消息（含或不含 Figma 链接）。返回 true=成功，false=失败。 */
 export async function runPipeline(msg: NormalizedWechatMessage): Promise<boolean> {
   const startedAt = Date.now();
@@ -43,12 +50,12 @@ export async function runPipeline(msg: NormalizedWechatMessage): Promise<boolean
 
     const target = await resolveTargetNodeId(link.fileKey, link.nodeId);
 
-    // 并行获取：节点元数据、高清切图、Design Tokens（Tokens 失败不阻塞主流程）
-    const [metadata, exportRes, tokens] = await Promise.all([
-      getNodeMetadata(target.fileKey, target.nodeId),
-      exportImage(target.fileKey, target.nodeId),
-      getDesignTokens(target.fileKey).catch(() => undefined),
-    ]);
+    // 串行获取：先拉节点元数据，间隔 500ms 再导出高清切图，规避瞬时并发限流。
+    const metadata = await getNodeMetadata(target.fileKey, target.nodeId);
+    await sleep(FIGMA_REQUEST_GAP_MS);
+    const exportRes = await exportImage(target.fileKey, target.nodeId);
+    // Design Tokens 按需拉取（失败不阻塞主流程）
+    const tokens = await getDesignTokens(target.fileKey).catch(() => undefined);
 
     logger.info(`[pipeline] Figma 数据就绪，开始 LLM 分析: ${metadata.name}`);
     const analysis = await analyzeDesign(exportRes.imageUrl, metadata, tokens);
